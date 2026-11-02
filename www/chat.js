@@ -52,7 +52,7 @@ const parts = s => Math.ceil(pages(s).length / PER);
 
 /* ---------- progress ---------- */
 const KEY = 'bubu-chat.v1';
-const DEF = { name: '', av: 0, done: {}, words: {}, stk: [], stars: 0, sfx: true, arVoice: true, rate: 1, last: null };
+const DEF = { name: '', av: 0, done: {}, words: {}, stk: [], stars: 0, sfx: true, arVoice: true, rate: 1, last: null, vol: 2, repS: 1, repW: 2 };
 let G = Object.assign({}, DEF);
 try { const r = JSON.parse(localStorage.getItem(KEY) || 'null'); if (r) G = Object.assign({}, DEF, r); } catch (e) { }
 let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(G)); } catch (e) { } }, 120); };
@@ -72,6 +72,20 @@ function loadPack(name) { return new Promise(res => { if (PACKS[name]) return re
 async function clipUrl(w) { const id = AU.e[enKey(w)]; if (!id) return null; if (URLS[id]) return URLS[id]; const name = 'e' + id[0]; await loadPack(name); const b = PACKS[name]?.[id]; if (!b) return null; const bin = atob(b), u = new Uint8Array(bin.length); for (let j = 0; j < bin.length; j++) u[j] = bin.charCodeAt(j); return URLS[id] = URL.createObjectURL(new Blob([u], { type: 'audio/webm' })); }
 const prefetch = s => [...new Set(vocab(s).map(v => AU.e[enKey(v.w)]).filter(Boolean).map(id => 'e' + id[0]))].forEach(loadPack);
 const wa = new Audio(), SA = new Audio(); let saSrc = '', saRaf = 0, tok = 0;
+/* loudness: route story + word audio through a gain + limiter so it can go well above normal volume */
+let AC = null, BOOST = null;
+const VOLS = [[1, 'عادي'], [2, 'عالي'], [3.5, 'عالي كتير']];
+function ensureAC() { try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); } catch (e) { } return AC; }
+function boost() {
+  if (BOOST || !ensureAC()) return; try {
+    const g = AC.createGain(), lim = AC.createDynamicsCompressor();
+    lim.threshold.value = -6; lim.knee.value = 4; lim.ratio.value = 20; lim.attack.value = .002; lim.release.value = .15;
+    g.connect(lim); lim.connect(AC.destination);
+    [wa, SA].forEach(a => AC.createMediaElementSource(a).connect(g)); BOOST = g;
+  } catch (e) { BOOST = null; }
+}
+const applyVol = () => { if (BOOST) BOOST.gain.value = G.vol || 1; };
+document.addEventListener('pointerdown', () => { ensureAC(); boost(); applyVol(); }, true);
 let voices = []; try { const pv = () => { voices = speechSynthesis.getVoices(); }; pv(); speechSynthesis.onvoiceschanged = pv; } catch (e) { }
 function tts(text, lang, rate) {
   return new Promise(res => {
@@ -80,9 +94,13 @@ function tts(text, lang, rate) {
   });
 }
 function stopAll() { tok++; try { wa.pause(); SA.pause(); } catch (e) { } cancelAnimationFrame(saRaf); try { speechSynthesis.cancel(); window.Capacitor?.Plugins?.TextToSpeech?.stop?.(); } catch (e) { } }
-async function sayWord(w, rate = 1) {
+async function sayWord(w, rate = 1, times = 1) {
+  for (let i = 0; i < times; i++) { const my0 = tok; await say1(w, rate); if (i < times - 1) { await wait(450); if (tok !== my0) return; } }
+}
+async function say1(w, rate = 1) {
   stopAll(); const my = tok; const url = await clipUrl(w); if (my !== tok) return;
   if (!url) return tts(enSay(w), 'en', .8 * rate);
+  ensureAC(); applyVol();
   return new Promise(res => { let d = false; const fin = () => { if (!d) { d = true; res(); } }; wa.onended = fin; wa.onerror = fin; wa.src = url; wa.playbackRate = rate * (G.rate || 1); wa.play().catch(fin); setTimeout(fin, 7000); });
 }
 const sayAr = text => G.arVoice ? tts(noTash(text), 'ar', .95) : Promise.resolve();
@@ -93,7 +111,7 @@ function playPage(s, pg, bubble) {
     if (!s.a || i0 == null || i0 >= s.t.length) return res();
     stopAll(); const my = tok;
     if (saSrc !== s.a) { SA.src = s.a; saSrc = s.a; }
-    SA.playbackRate = .92 * (G.rate || 1);
+    SA.playbackRate = .92 * (G.rate || 1); ensureAC(); applyVol();
     const st = Math.max(0, T(i0) - .12), en = i1 + 1 < s.t.length ? T(i1 + 1) - .08 : s.d;
     const els = bubble ? $$('.t', bubble) : [];
     const go = () => { try { SA.currentTime = st; } catch (e) { } SA.play().catch(res); let last = -1;
@@ -109,8 +127,7 @@ function playPage(s, pg, bubble) {
     setTimeout(res, 40000);
   });
 }
-let AC = null;
-function tone(f, t0, dur, type = 'sine', vol = .12) { if (!G.sfx) return; try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime + t0; o.type = type; o.frequency.setValueAtTime(f, t); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + .015); g.gain.exponentialRampToValueAtTime(.0008, t + dur); o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + dur + .05); } catch (e) { } }
+function tone(f, t0, dur, type = 'sine', vol = .12) { if (!G.sfx) return; try { if (!ensureAC()) return; const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime + t0; o.type = type; o.frequency.setValueAtTime(f, t); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + .015); g.gain.exponentialRampToValueAtTime(.0008, t + dur); o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + dur + .05); } catch (e) { } }
 const SFX = { msg: () => tone(880, 0, .07, 'sine', .06), send: () => { tone(620, 0, .06, 'triangle', .07); tone(930, .05, .08, 'triangle', .06); }, ok: () => [660, 880, 1320].forEach((f, k) => tone(f, k * .08, .18, 'triangle', .1)), no: () => tone(300, 0, .2, 'sine', .07), win: () => [523, 659, 784, 1046, 1318].forEach((f, k) => tone(f, k * .1, .3, 'triangle', .12)) };
 function confetti() {
   if (reduce) return; const c = document.createElement('canvas'); c.className = 'confetti'; document.body.appendChild(c);
@@ -153,12 +170,17 @@ function settings() {
     <div class="row">الشخصية <span class="avs sm">${KIDS.map((e, k) => `<button type="button" class="avb ${k === G.av ? 'on' : ''}" data-av="${k}">${e}</button>`).join('')}</span></div>
     <label class="row"><input type="checkbox" id="arv" ${G.arVoice ? 'checked' : ''}> لولو تقرا الكلام العربي بصوت</label>
     <label class="row"><input type="checkbox" id="sfx" ${G.sfx ? 'checked' : ''}> أصوات الرسائل</label>
+    <div class="row">🔊 علوّ الصوت <span class="seg">${VOLS.map(([v, l]) => `<button type="button" data-vol="${v}" class="${G.vol === v ? 'on' : ''}">${l}</button>`).join('')}</span></div>
+    <div class="row">🔁 تكرار الجملة <span class="seg">${[1, 2, 3].map(v => `<button type="button" data-rs="${v}" class="${G.repS === v ? 'on' : ''}">${AR(v)}</button>`).join('')}</span></div>
+    <div class="row">🔁 تكرار الكلمة <span class="seg">${[1, 2, 3].map(v => `<button type="button" data-rw="${v}" class="${G.repW === v ? 'on' : ''}">${AR(v)}</button>`).join('')}</span></div>
     <div class="row">سرعة الصوت <span class="seg">${[[.8, 'بطيء'], [1, 'عادي']].map(([v, l]) => `<button type="button" data-r="${v}" class="${G.rate === v ? 'on' : ''}">${l}</button>`).join('')}</span></div>
     <button class="go" type="button" id="ok">تمام</button></div>`;
   document.body.append(sc, p);
   $$('[data-av]', p).forEach(b => b.onclick = () => { G.av = +b.dataset.av; $$('.avb', p).forEach(x => x.classList.toggle('on', x === b)); });
+  const segPick = (attr, key, after) => $$(`[data-${attr}]`, p).forEach(b => b.onclick = () => { G[key] = +b.dataset[attr]; $$(`[data-${attr}]`, p).forEach(x => x.classList.toggle('on', x === b)); save(); after && after(); });
+  segPick('vol', 'vol', () => { boost(); applyVol(); sayWord('hello'); }); segPick('rs', 'repS'); segPick('rw', 'repW');
   $$('[data-r]', p).forEach(b => b.onclick = () => { G.rate = +b.dataset.r; $$('[data-r]', p).forEach(x => x.classList.toggle('on', x === b)); });
-  const close = () => { G.name = $('#nm2', p).value.trim() || G.name; G.arVoice = $('#arv', p).checked; G.sfx = $('#sfx', p).checked; save(); sc.remove(); p.remove(); list(); };
+  const close = () => { G.name = $('#nm2', p).value.trim() || G.name; G.arVoice = $('#arv', p).checked; G.sfx = $('#sfx', p).checked; save(); sc.remove(); p.remove(); if (!C) list(); };
   $('#ok', p).onclick = close; sc.onclick = close;
 }
 
@@ -168,10 +190,11 @@ function openChat(s) {
   stopAll(); prefetch(s); G.last = s.id; save(); document.body.classList.add('in-chat');
   const part = Math.min(parts(s) - 1, G.done[s.id] || 0);
   C = { s, part, run: Math.random(), stars: 0, asked: 0, ok: 0, met: [] };
-  app.innerHTML = `<header class="ch"><div class="in"><button class="ib" type="button" id="back" aria-label="رجوع">→</button><span class="duo s">${OWL(40)}${LULU(38)}</span><div class="grow"><b>بوبو ولولو</b><small id="status">متّصلين الآن</small></div><span class="star" id="st">⭐ <span>0</span></span></div></header>
+  app.innerHTML = `<header class="ch"><div class="in"><button class="ib" type="button" id="back" aria-label="رجوع">→</button><span class="duo s">${OWL(40)}${LULU(38)}</span><div class="grow"><b>بوبو ولولو</b><small id="status">متّصلين الآن</small></div><span class="star" id="st">⭐ <span>0</span></span><button class="ib" type="button" id="set2" aria-label="الصوت والتكرار">🔊</button></div></header>
     <main class="feed" id="feed" aria-live="polite"></main>
     <footer class="replies" id="rp"><div class="in" id="rpin"></div></footer>`;
   $('#back').onclick = () => { C = null; list(); };
+  $('#set2').onclick = settings;
   runChat(C);
 }
 const alive = c => C === c && $('#feed');
@@ -212,7 +235,7 @@ function star(c, el) { c.stars++; G.stars++; save(); const s = $('#st span'); if
 async function gameMeaning(c, v, pool) {
   const ms = shuffle([v, ...shuffle(pool.filter(x => x !== v && quiz(x) && arShort(x.m) !== arShort(v.m))).slice(0, 2)]);
   await say(c, 'lulu', `بوبو، شو يعني ${wordHtml(v)}؟ 🤔<br><small>${esc(kidName())}، بتعرفي؟ ساعديني!</small>`, { ar: `بوبو شو يعني الكلمة؟ ${kidName()} بتعرفي؟` });
-  sayWord(v.w);
+  sayWord(v.w, 1, G.repW || 1);
   const pick = await ask(c, ms.map(x => ({ html: `${x.emo ? x.emo + ' ' : ''}${esc(arShort(x.m))}`, x })));
   if (!pick) return; addMsg('me', `${pick.x.emo ? pick.x.emo + ' ' : ''}${esc(arShort(pick.x.m))}`);
   const ok = pick.x === v; c.asked++; markWord(v, ok);
@@ -223,7 +246,7 @@ async function gamePicture(c, v, pool) {
   const ps = shuffle([v, ...shuffle(pool.filter(x => x.emo && x.emo !== v.emo)).slice(0, 2)]);
   if (ps.length < 3) return gameMeaning(c, v, pool);
   await say(c, 'bubu', `<span class="en">Show me <b>${esc(v.w)}</b>!</span> 👀<br><small>وين الصورة؟ اضغطي عليها!</small>`);
-  sayWord(v.w);
+  sayWord(v.w, 1, G.repW || 1);
   const pick = await ask(c, ps.map(x => ({ html: `<span class="bigemo">${x.emo}</span>`, x })), 'pics');
   if (!pick) return; addMsg('me', `<span class="bigemo">${pick.x.emo}</span>`);
   const ok = pick.x === v; c.asked++; markWord(v, ok);
@@ -233,7 +256,7 @@ async function gamePicture(c, v, pool) {
 async function gameVoice(c, v, pool) {
   const ws = shuffle([v, ...shuffle(pool.filter(x => x.k !== v.k && quiz(x))).slice(0, 2)]);
   const m = await say(c, 'bubu', `<button class="vn" type="button" data-w="${esc(v.w)}"><span>▶</span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><small>رسالة صوتية</small></button><small>اسمعي… شو قلت؟ 🎧</small>`);
-  if (!m) return; await sayWord(v.w);
+  if (!m) return; await sayWord(v.w, 1, G.repW || 1);
   const pick = await ask(c, ws.map(x => ({ html: `${x.emo ? x.emo + ' ' : ''}<span class="en">${esc(x.w)}</span>`, x })));
   if (!pick) return; addMsg('me', `<span class="en">${esc(pick.x.w)}</span>`);
   const ok = pick.x === v; c.asked++; markWord(v, ok);
@@ -243,7 +266,7 @@ async function gameVoice(c, v, pool) {
 async function gameSpell(c, v) {
   const w = v.w.toLowerCase(); if (!/^[a-z]{3,6}$/.test(w)) return false;
   await say(c, 'lulu', `ساعديني أكتب ${v.emo || ''} <b class="en">${esc(v.w)}</b> ✍️<br><small>اضغطي الحروف بالترتيب</small>`, { ar: 'ساعديني أكتبها' });
-  sayWord(v.w);
+  sayWord(v.w, 1, G.repW || 1);
   const letters = w.split(''); let got = 0, mist = 0;
   const box = $('#rpin'); if (!box) return true; $('#rp').classList.add('up'); setTimeout(scrollEnd, 330); box.className = 'in spell';
   await new Promise(res => {
@@ -258,7 +281,7 @@ async function gameSpell(c, v) {
 }
 async function gameRepeat(c, v) {
   await say(c, 'bubu', `Say it with me! 🗣️<br>${wordHtml(v)}<br><small>قوليها بصوت عالي معي</small>`);
-  await sayWord(v.w, .85); await wait(300); await sayWord(v.w);
+  await sayWord(v.w, .85, G.repW || 1); await wait(300); await sayWord(v.w);
   const pick = await ask(c, [{ html: '🗣️ قلتها!' }, { html: '🔁 كمان مرة' }]);
   if (!pick) return; if (pick.html.includes('🔁')) { addMsg('me', '🔁 كمان مرة'); await sayWord(v.w, .8); await ask(c, [{ html: '🗣️ قلتها!' }]); }
   addMsg('me', `🗣️ <b class="en">${esc(v.w)}</b>!`); star(c); SFX.ok();
@@ -270,7 +293,7 @@ async function runChat(c) {
   /* warm-up: words met before come back */
   const here = new Set(part.flatMap(pg => pg.words.map(wid)));
   const old = Object.entries(G.words).filter(([k]) => !here.has(k) && quiz({ k: k.slice(k.indexOf(':') + 1) })).sort((a, b) => (b[1].bad - b[1].ok) - (a[1].bad - a[1].ok) || a[1].t - b[1].t).slice(0, 8).map(([k]) => { const i = k.indexOf(':'), st = BY.get(k.slice(0, i)); return st && vocab(st).find(v => v.k === k.slice(i + 1)); }).filter(Boolean);
-  await say(c, 'bubu', `<b class="en">Hello</b> ${esc(kidName())}! 👋`, { t: 500 }); sayWord('hello');
+  await say(c, 'bubu', `<b class="en">Hello ${esc(kidName())}!</b> 👋`, { t: 500 }); sayWord('hello');
   if (c.part === 0) await say(c, 'lulu', `هاي ${esc(kidName())}! 💖 بوبو بدّه يحكيلنا قصة اليوم: <b>${esc(noTash(s.ar))}</b> ${part.find(p => p.pics.length)?.pics[0] || '📖'}`, { ar: `هاي ${kidName()}! بوبو بده يحكيلنا قصة اليوم` });
   else await say(c, 'lulu', `رجعتي! 🥳 بنكمّل قصة <b>${esc(noTash(s.ar))}</b>، الجزء ${AR(c.part + 1)}`, { ar: 'رجعتي! بنكمّل القصة' });
   if (old.length >= 3 && alive(c)) {
@@ -289,7 +312,7 @@ async function runChat(c) {
     const m = await say(c, 'bubu', `${pg.pics.length ? `<div class="scene">${pg.pics.map(e => `<span>${e}</span>`).join('')}</div>` : ''}<p class="en sent">${sent}</p><p class="tr">${esc(pg.ar)}</p><button class="rep" type="button" data-replay="${idx}" aria-label="اسمعي مرة ثانية">🔊</button>`, { cls: 'story' });
     if (!m) return;
     pg.words.forEach(v => { meet(v); if (!c.met.includes(v)) c.met.push(v); });
-    await playPage(s, pg, $('.bub', m));
+    for (let r = 0; r < (G.repS || 1); r++) { if (!alive(c)) return; if (r) await wait(600); await playPage(s, pg, $('.bub', m)); }
     if (!alive(c)) return;
     since++;
     const fresh = pg.words.filter(v => !used.has(v) && quiz(v)), metQ = c.met.filter(quiz);
@@ -314,7 +337,7 @@ async function runChat(c) {
   const fin = (G.done[s.id] || 0) >= parts(s);
   await say(c, 'lulu', fin ? `خلّصنا القصة كلها! 🎉 إنتِ بطلة يا ${esc(kidName())} 🏆` : `بكرة بنكمّل القصة! 💖 جمعتي ${AR(c.stars)} نجمة اليوم ⭐`, { ar: fin ? 'خلصنا القصة كلها! إنتِ بطلة' : 'بكرة بنكمّل القصة' });
   if (c.met.length) await say(c, 'bubu', `<b>كلمات اليوم</b> 🧺<div class="wl">${c.met.map(v => wordHtml(v)).join('')}</div><small>اضغطي على أي كلمة لتسمعيها</small>`);
-  await say(c, 'bubu', `<b class="en">Bye bye</b> ${esc(kidName())}! 👋🦉`, { t: 500 }); sayWord('bye');
+  await say(c, 'bubu', `<b class="en">Bye bye ${esc(kidName())}!</b> 👋🦉`, { t: 500 }); sayWord('bye');
   const nx = fin ? STORIES[s.ix + 1] : s;
   const r2 = await ask(c, [{ html: fin ? '📖 القصة الجاية' : '▶️ كمّلي الجزء الجاي', go: nx }, { html: '🏠 الدردشات' }]);
   if (!r2 || !alive(c)) return; if (r2.go) openChat(r2.go); else list();
