@@ -65,7 +65,7 @@ jobs:
         with:
           tag_name: v1.${{ github.run_number }}
           name: دردشة بوبو ${{ github.run_number }}
-          body: ثبّت الملف lughati-chat.apk على جوالك. التطبيق بيشتغل كامل بدون نت: بوبو ولولو بيحكوا قصص المستوى الأول والثاني بالصوت مع ألعاب الكلمات.
+          body: ثبّت الملف lughati-chat.apk على جوالك. التطبيق بيشتغل كامل بدون نت، بوبو ولولو بيحكوا قصص المستوى الأول والثاني بالصوت مع ألعاب الكلمات.
           files: lughati-chat.apk
           make_latest: true
           target_commitish: ${{ github.sha }}
