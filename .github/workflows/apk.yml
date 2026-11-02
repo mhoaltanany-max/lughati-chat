@@ -1,0 +1,71 @@
+name: Build Android app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Wrap the game with Capacitor (fonts bundled for offline use)
+        run: |
+          mkdir -p build && cp -r www build/www && mkdir -p build/www/fonts
+          cd build
+          npm init -y >/dev/null
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor-community/text-to-speech@4 @fontsource/baloo-bhaijaan-2 @fontsource/andika
+          : > www/fonts/fonts.css
+          for f in baloo-bhaijaan-2/400 baloo-bhaijaan-2/500 baloo-bhaijaan-2/600 baloo-bhaijaan-2/700 baloo-bhaijaan-2/800 andika/400 andika/700; do
+            [ -f node_modules/@fontsource/$f.css ] && cat node_modules/@fontsource/$f.css >> www/fonts/fonts.css
+          done
+          for p in baloo-bhaijaan-2 andika; do cp node_modules/@fontsource/$p/files/*.woff2 www/fonts/ 2>/dev/null || true; done
+          sed -i 's#url(\./files/#url(./#g' www/fonts/fonts.css
+          sed -i 's#<link rel="stylesheet" href="https://fonts.googleapis.com[^"]*">#<link rel="stylesheet" href="fonts/fonts.css">#' www/index.html
+          grep -c woff2 www/fonts/fonts.css
+          cat > capacitor.config.json <<'JSON'
+          { "appId": "com.mho.lughatichat", "appName": "دردشة بوبو", "webDir": "www",
+            "server": { "androidScheme": "https" }, "android": { "backgroundColor": "#FFF6EC" } }
+          JSON
+          npx cap add android
+          npx cap sync android
+
+      - name: App icon
+        run: |
+          R=build/android/app/src/main/res
+          for n in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p $R/mipmap-$n
+            cp icons/android/$n.png $R/mipmap-$n/ic_launcher.png
+            cp icons/android/$n.png $R/mipmap-$n/ic_launcher_round.png
+            cp icons/android/${n}_fg.png $R/mipmap-$n/ic_launcher_foreground.png
+          done
+          rm -rf $R/mipmap-anydpi-v26
+
+      - name: Build APK
+        run: |
+          cd build/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -q
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/apksigner sign --ks ../../signing/release.keystore --ks-pass pass:lughati-chat --key-pass pass:lughati-chat --ks-key-alias lughatichat --out ../../lughati-chat.apk app/build/outputs/apk/debug/app-debug.apk
+          $BT/apksigner verify --print-certs ../../lughati-chat.apk | head -2
+          ls -la ../../lughati-chat.apk
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.${{ github.run_number }}
+          name: دردشة بوبو ${{ github.run_number }}
+          body: ثبّت الملف lughati-chat.apk على جوالك. التطبيق بيشتغل كامل بدون نت: بوبو ولولو بيحكوا قصص المستوى الأول والثاني بالصوت مع ألعاب الكلمات.
+          files: lughati-chat.apk
+          make_latest: true
+          target_commitish: ${{ github.sha }}
